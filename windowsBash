@@ -7,7 +7,7 @@ do
     #echo "$entry"
     echo @echo off > "$windowsPath""$filename".bat
     echo bash -c \""$filename" %*\" >> "$windowsPath""$filename".bat
-    if [[ ( $filename == "apt-get" ) || (  $filename == "apt" || $filename == "npm" || $filename == "yarn" ) ]];then
+    if [[ ( $filename == "apt-get" ) || (  $filename == "apt" ) || ( $filename == "npm" ) ||  ( $filename == "yarn" ) ]];then
       echo bash -c \"windowsBash\" >> "$windowsPath""$filename".bat
     fi
   fi
