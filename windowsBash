@@ -5,10 +5,10 @@ do
   if [ -f "$entry" ];then
     filename=$(basename "$entry")
     #echo "$entry"
-    echo @echo off > "$windowsPath""$filename".bat
-    echo bash -c \""$filename" %*\" >> "$windowsPath""$filename".bat
+    echo @echo off > "$windowsPath""$filename".cmd
+    echo wsl -c \""$filename" %*\" >> "$windowsPath""$filename".cmd
     if [[ ( $filename == "apt-get" ) || (  $filename == "apt" || $filename == "npm" || $filename == "yarn" ) ]];then
-      echo bash -c \"windowsBash\" >> "$windowsPath""$filename".bat
+      echo wsl -c \"windowsBash\" >> "$windowsPath""$filename".cmd
     fi
   fi
 done
