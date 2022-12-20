@@ -6,9 +6,9 @@ do
     filename=$(basename "$entry")
     #echo "$entry"
     echo @echo off > "$windowsPath""$filename".cmd
-    echo wsl -c \""$filename" %*\" >> "$windowsPath""$filename".cmd
+    echo ubuntu -c \""$filename" %*\" >> "$windowsPath""$filename".cmd
     if [[ ( $filename == "apt-get" ) || (  $filename == "apt" ) || ( $filename == "npm" ) ||  ( $filename == "yarn" ) ]];then
-      echo wsl -c \"windowsBash\" >> "$windowsPath""$filename".cmd
+      echo ubuntu -c \"windowsBash\" >> "$windowsPath""$filename".cmd
     fi
   fi
 done
