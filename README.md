@@ -7,7 +7,7 @@ How to install
 
 Run the following command inside Windows Bash to generate shortcuts for commands
 ```sh
-wget https://raw.githubusercontent.com/fmorea/windowsBash/master/windowsBash -P /usr/bin && chmod 0777 /usr/bin/windowsBash && windowsBash
+sudo wget https://raw.githubusercontent.com/fmorea/windowsBash/master/windowsBash -P /usr/bin && sudo chmod 0777 /usr/bin/windowsBash && windowsBash
 ```
 
 Then just add the following directory to your path in Windows
