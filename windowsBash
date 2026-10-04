@@ -1,14 +1,369 @@
-windowsPath=/mnt/c/windowsBash/
-mkdir -p "$windowsPath"
-for entry in /usr/bin/* /bin/*
-do
-  if [ -f "$entry" ];then
-    filename=$(basename "$entry")
-    #echo "$entry"
-    echo @echo off > "$windowsPath""$filename".cmd
-    echo ubuntu -c \""$filename" %*\" >> "$windowsPath""$filename".cmd
-    if [[ ( $filename == "apt-get" ) || (  $filename == "apt" ) || ( $filename == "npm" ) ||  ( $filename == "yarn" ) ]];then
-      echo ubuntu -c \"windowsBash\" >> "$windowsPath""$filename".cmd
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# ============================================================
+# windowsBash
+# Windows CMD -> Linux commands tramite WSL1
+# ============================================================
+
+WINDOWS_PATH="/mnt/c/windowsBash"
+
+# Launcher WSL esplicito
+WSL_EXE='C:\Program Files\WSL\wsl.exe'
+
+# Helper Linux eseguito come root.
+# Serve SOLO per montare il drive; il comando finale viene
+# rieseguito con l'utente Linux normale.
+RUNNER="/usr/local/libexec/windowsbash-runner"
+
+# Script per rigenerare i wrapper senza reinstallare tutto
+REFRESH="$HOME/.local/bin/windowsBash-refresh"
+
+LINUX_USER="$(id -un)"
+LINUX_HOME="$HOME"
+LINUX_PATH="$PATH"
+
+
+echo "============================================================"
+echo " windowsBash installer"
+echo "============================================================"
+echo "Utente Linux : $LINUX_USER"
+echo "Home Linux   : $LINUX_HOME"
+echo "Wrapper CMD  : C:\\windowsBash"
+echo "WSL          : $WSL_EXE"
+echo
+
+
+# ============================================================
+# Directory
+# ============================================================
+
+mkdir -p "$WINDOWS_PATH"
+mkdir -p "$LINUX_HOME/.local/bin"
+
+sudo mkdir -p "$(dirname "$RUNNER")"
+
+
+# ============================================================
+# RUNNER
+#
+# Viene chiamato così:
+#
+#   wsl.exe --cd / --user root --exec windowsbash-runner ...
+#
+# È importante:
+#
+#   1. WSL parte SEMPRE da /
+#   2. quindi non prova a tradurre D:\Desktop
+#   3. il runner monta D: -> /mnt/d
+#   4. converte D:\Desktop -> /mnt/d/Desktop
+#   5. fa cd lì
+#   6. abbandona root
+#   7. esegue ls/cat/grep/... come utente normale
+# ============================================================
+
+sudo tee "$RUNNER" >/dev/null <<'RUNNER_EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+LINUX_USER="$1"
+LINUX_HOME="$2"
+LINUX_PATH="$3"
+COMMAND="$4"
+WINDOWS_CWD="$5"
+
+shift 5
+
+
+die()
+{
+    echo "windowsBash: $*" >&2
+    exit 1
+}
+
+
+# ============================================================
+# Monta un drive Windows se necessario
+#
+#   D -> D: -> /mnt/d
+# ============================================================
+
+mount_drive()
+{
+    local letter="$1"
+
+    local lower
+    local upper
+    local mountpoint
+
+    lower="$(printf '%s' "$letter" | tr '[:upper:]' '[:lower:]')"
+    upper="$(printf '%s' "$letter" | tr '[:lower:]' '[:upper:]')"
+
+    mountpoint="/mnt/$lower"
+
+    mkdir -p "$mountpoint"
+
+    # Se /mnt/d è già un filesystem montato, non fare nulla.
+    if grep -qsE "[[:space:]]${mountpoint}[[:space:]]" /proc/mounts; then
+        return 0
     fi
-  fi
+
+    # D: -> /mnt/d
+    mount -t drvfs "${upper}:" "$mountpoint" ||
+        die "impossibile montare ${upper}: su $mountpoint"
+}
+
+
+# ============================================================
+# Windows path -> Linux path
+#
+# D:\Desktop\TPSEE
+#
+# diventa
+#
+# /mnt/d/Desktop/TPSEE
+# ============================================================
+
+windows_path_to_linux()
+{
+    local winpath="$1"
+
+    if [[ "$winpath" =~ ^([A-Za-z]):(.*)$ ]]; then
+
+        local drive="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]}"
+
+        mount_drive "$drive"
+
+        drive="$(printf '%s' "$drive" | tr '[:upper:]' '[:lower:]')"
+
+        # \ -> /
+        rest="${rest//\\//}"
+
+        printf '/mnt/%s%s' "$drive" "$rest"
+        return 0
+    fi
+
+    return 1
+}
+
+
+# ============================================================
+# Controlli
+# ============================================================
+
+[[ -x "$COMMAND" ]] ||
+    die "comando non eseguibile: $COMMAND"
+
+
+LINUX_CWD="$(windows_path_to_linux "$WINDOWS_CWD")" ||
+    die "directory Windows non supportata: $WINDOWS_CWD"
+
+
+[[ -d "$LINUX_CWD" ]] ||
+    die "directory inesistente dopo la conversione: $LINUX_CWD"
+
+
+cd -- "$LINUX_CWD" ||
+    die "impossibile entrare in: $LINUX_CWD"
+
+
+# ============================================================
+# Traduce ANCHE eventuali argomenti che sono path Windows
+#
+# esempio:
+#
+#   cat "D:\Desktop\file.txt"
+#
+# diventa:
+#
+#   cat "/mnt/d/Desktop/file.txt"
+# ============================================================
+
+ARGS=()
+
+for arg in "$@"; do
+
+    if [[ "$arg" =~ ^[A-Za-z]:[\\/].* ]]; then
+
+        converted="$(windows_path_to_linux "$arg")" ||
+            converted="$arg"
+
+        ARGS+=("$converted")
+
+    else
+        ARGS+=("$arg")
+    fi
+
 done
+
+
+# ============================================================
+# Torna all'utente Linux normale
+#
+# Il mount richiedeva root.
+# ls, grep, python, gcc ecc. NON devono girare come root.
+# ============================================================
+
+export HOME="$LINUX_HOME"
+export USER="$LINUX_USER"
+export LOGNAME="$LINUX_USER"
+export PATH="$LINUX_PATH"
+
+
+RUNUSER="$(command -v runuser || true)"
+
+[[ -n "$RUNUSER" ]] ||
+    die "runuser non trovato"
+
+
+exec "$RUNUSER" \
+    --preserve-environment \
+    -u "$LINUX_USER" \
+    -- \
+    "$COMMAND" "${ARGS[@]}"
+
+RUNNER_EOF
+
+
+sudo chmod 755 "$RUNNER"
+
+
+# ============================================================
+# Generatore vero e proprio dei .CMD
+# ============================================================
+
+cat > "$REFRESH" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+WINDOWS_PATH='$WINDOWS_PATH'
+WSL_EXE='$WSL_EXE'
+RUNNER='$RUNNER'
+
+LINUX_USER='$LINUX_USER'
+LINUX_HOME='$LINUX_HOME'
+LINUX_PATH='$LINUX_PATH'
+
+REFRESH='$REFRESH'
+
+mkdir -p "\$WINDOWS_PATH"
+
+rm -f "\$WINDOWS_PATH"/*.cmd
+
+declare -A SEEN
+
+COUNT=0
+
+
+# Directory Linux dalle quali esportare i comandi
+SEARCH_DIRS=(
+    /usr/local/bin
+    /usr/bin
+    /bin
+)
+
+[[ -d "\$LINUX_HOME/.local/bin" ]] &&
+    SEARCH_DIRS+=("\$LINUX_HOME/.local/bin")
+
+[[ -d "\$LINUX_HOME/.cargo/bin" ]] &&
+    SEARCH_DIRS+=("\$LINUX_HOME/.cargo/bin")
+
+
+for DIR in "\${SEARCH_DIRS[@]}"; do
+
+    [[ -d "\$DIR" ]] || continue
+
+    for ENTRY in "\$DIR"/*; do
+
+        [[ -f "\$ENTRY" && -x "\$ENTRY" ]] || continue
+
+        FILENAME="\${ENTRY##*/}"
+
+        # Evita di esportare i nostri helper
+        case "\$FILENAME" in
+            windowsBash-*|windowsbash-*)
+                continue
+                ;;
+        esac
+
+        # Evita nomi incompatibili con i file Windows
+        [[ "\$FILENAME" =~ ^[A-Za-z0-9._+@=-]+$ ]] || continue
+
+        # Windows è case-insensitive:
+        # evita wrapper duplicati con differenze solo maiuscole/minuscole.
+        KEY="\$(printf '%s' "\$FILENAME" | tr '[:upper:]' '[:lower:]')"
+
+        [[ -n "\${SEEN[\$KEY]:-}" ]] && continue
+
+        SEEN["\$KEY"]=1
+
+
+        CMD_FILE="\$WINDOWS_PATH/\$FILENAME.cmd"
+
+
+        cat > "\$CMD_FILE" <<CMD_EOF
+@echo off
+setlocal EnableExtensions
+
+"$WSL_EXE" --cd / --user root --exec "$RUNNER" "$LINUX_USER" "$LINUX_HOME" "$LINUX_PATH" "\$ENTRY" "%CD%" %*
+
+set "RC=%ERRORLEVEL%"
+
+endlocal & exit /b %RC%
+CMD_EOF
+
+
+        COUNT=\$((COUNT + 1))
+
+    done
+done
+
+
+# ============================================================
+# Wrapper speciale per aggiornare la lista dei comandi
+# ============================================================
+
+cat > "\$WINDOWS_PATH/windowsBash-refresh.cmd" <<REFRESH_EOF
+@echo off
+"$WSL_EXE" --cd / --exec "$REFRESH"
+REFRESH_EOF
+
+
+echo
+echo "windowsBash: \$COUNT wrapper generati."
+echo "windowsBash: C:\\windowsBash"
+EOF
+
+
+chmod +x "$REFRESH"
+
+
+# ============================================================
+# Prima generazione
+# ============================================================
+
+"$REFRESH"
+
+
+echo
+echo "============================================================"
+echo " INSTALLAZIONE COMPLETATA"
+echo "============================================================"
+echo
+echo "Runner:"
+echo "  $RUNNER"
+echo
+echo "Refresh:"
+echo "  $REFRESH"
+echo
+echo "Wrapper Windows:"
+echo "  C:\\windowsBash"
+echo
+echo "Dopo apt/npm/pip ecc. puoi eseguire:"
+echo
+echo "  windowsBash-refresh"
+echo
+echo "direttamente da CMD."
+echo
+echo "============================================================"

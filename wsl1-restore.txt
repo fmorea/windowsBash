@@ -1,0 +1,5 @@
+Restoring WSL1 as uses less RAM and we don't need GUI
+wsl --list --verbose
+wsl --unregister Ubuntu
+wsl --set-default-version 1
+wsl --install -d Ubuntu
